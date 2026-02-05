@@ -147,8 +147,9 @@ MMFLASH_CODE_NOINLINE static bool flashOctoSpiInit(const flashConfig_t *flashCon
 #endif
 
         for (uint8_t offset = 0; offset <= 1 && !detected; offset++) {
-
+#if defined(USE_FLASH_W25N01G) || defined(USE_FLASH_W25N02K) || defined(USE_FLASH_W25Q128FV) || defined(USE_FLASH_W25M02G)
             uint32_t jedecID = (readIdResponse[offset + 0] << 16) | (readIdResponse[offset + 1] << 8) | (readIdResponse[offset + 2]);
+#endif
 
             if (offset == 0) {
 #if defined(USE_FLASH_W25Q128FV)
@@ -195,13 +196,36 @@ static bool flashQuadSpiInit(const flashConfig_t *flashConfig)
     enum { TRY_1LINE = 0, TRY_4LINE, BAIL};
     int phase = TRY_1LINE;
 
-    QUADSPI_TypeDef *hqspi = quadSpiInstanceByDevice(QUADSPI_CFG_TO_DEV(flashConfig->quadSpiDevice));
+    dev = &devInstance;
 
-    flashDevice.io.handle.quadSpi = hqspi;
+    // Set up the QSPI bus device
+    if (!quadSpiSetBusInstance(dev, flashConfig->quadSpiDevice)) {
+        return false;
+    }
+
+    // Set the callback argument when calling back to this driver for DMA completion
+    dev->callbackArg = (uint32_t)&flashDevice;
+
+
+#if defined(QUADSPI_TRAIT_CS_SOFTWARE)
+    // Required for RP2350, but not for STM32 MCUs where the CS is controlled by hardware.
+
+    if (flashConfig->csTag) {
+        dev->busType_u.spi.csnPin = IOGetByTag(flashConfig->csTag);
+    } else {
+        return false;
+    }
+
+    IOInit(dev->busType_u.spi.csnPin, OWNER_FLASH_CS, 0);
+    IOConfigGPIO(dev->busType_u.spi.csnPin, SPI_IO_CS_CFG);
+    IOHi(dev->busType_u.spi.csnPin);
+#endif
+
     flashDevice.io.mode = FLASHIO_QUADSPI;
+    flashDevice.io.handle.dev = dev;
 
     do {
-        quadSpiSetDivisor(hqspi, QUADSPI_CLOCK_INITIALISATION);
+        quadSpiSetDivisor(dev, QUADSPI_CLOCK_INITIALISATION);
 
         // 3 bytes for what we need, but some IC's need 8 dummy cycles after the instruction, so read 4 and make two attempts to
         // assemble the chip id from the response.
@@ -210,10 +234,10 @@ static bool flashQuadSpiInit(const flashConfig_t *flashConfig)
         bool status = false;
         switch (phase) {
         case TRY_1LINE:
-            status = quadSpiReceive1LINE(hqspi, FLASH_INSTRUCTION_RDID, 0, readIdResponse, 4);
+            status = quadSpiReceive1LINE(dev, FLASH_INSTRUCTION_RDID, 0, readIdResponse, 4);
             break;
         case TRY_4LINE:
-            status = quadSpiReceive4LINES(hqspi, FLASH_INSTRUCTION_RDID, 2, readIdResponse, 3);
+            status = quadSpiReceive4LINES(dev, FLASH_INSTRUCTION_RDID, 2, readIdResponse, 3);
             break;
         default:
             break;
@@ -224,8 +248,7 @@ static bool flashQuadSpiInit(const flashConfig_t *flashConfig)
             continue;
         }
 
-        quadSpiSetDivisor(hqspi, QUADSPI_CLOCK_ULTRAFAST);
-
+        quadSpiSetDivisor(dev, QUADSPI_CLOCK_ULTRAFAST);
 
         for (uint8_t offset = 0; offset <= 1 && !detected; offset++) {
 
@@ -291,7 +314,7 @@ static bool flashSpiInit(const flashConfig_t *flashConfig)
     }
 
     // Set the callback argument when calling back to this driver for DMA completion
-    dev->callbackArg = (uint32_t)&flashDevice;
+    dev->callbackArg = (uintptr_t)&flashDevice;
 
     IOInit(dev->busType_u.spi.csnPin, OWNER_FLASH_CS, 0);
     IOConfigGPIO(dev->busType_u.spi.csnPin, SPI_IO_CS_CFG);
@@ -350,20 +373,23 @@ static bool flashSpiInit(const flashConfig_t *flashConfig)
         return detected;
     }
 
-    spiPreinitByTag(flashConfig->csTag);
-
+    ioPreinitByTag(flashConfig->csTag, IOCFG_IPU, PREINIT_PIN_STATE_HIGH);
     return false;
 }
 #endif // USE_FLASH_SPI
 
-void flashPreInit(const flashConfig_t *flashConfig)
+void flashPreinit(const flashConfig_t *flashConfig)
 {
-    spiPreinitRegister(flashConfig->csTag, IOCFG_IPU, 1);
+    ioPreinitByTag(flashConfig->csTag, IOCFG_IPU, PREINIT_PIN_STATE_HIGH);
 }
 
-bool flashDeviceInit(const flashConfig_t *flashConfig)
+static bool flashDeviceInit(const flashConfig_t *flashConfig)
 {
     bool haveFlash = false;
+
+#if !defined(USE_FLASH_SPI) && !defined(USE_FLASH_QUADSPI) && !defined(USE_FLASH_OCTOSPI)
+    UNUSED(flashConfig);
+#endif
 
 #ifdef USE_FLASH_SPI
     bool useSpi = (SPI_CFG_TO_DEV(flashConfig->spiDevice) != SPIINVALID);
@@ -412,22 +438,44 @@ MMFLASH_CODE bool flashWaitForReady(void)
     return flashDevice.vTable->waitForReady(&flashDevice);
 }
 
+static bool flashWaitForReadyOrFail(void)
+{
+    if (!flashDevice.vTable->waitForReady) {
+        return true;
+    }
+
+    if (!flashDevice.vTable->waitForReady(&flashDevice)) {
+        failureMode(FAILURE_EXTERNAL_FLASH_WRITE_FAILED);
+        return false;
+    }
+
+    return true;
+}
+
 MMFLASH_CODE void flashEraseSector(uint32_t address)
 {
     flashDevice.callback = NULL;
     flashDevice.vTable->eraseSector(&flashDevice, address);
+
+    if (!flashWaitForReadyOrFail()) {
+        return;
+    }
 }
 
 void flashEraseCompletely(void)
 {
     flashDevice.callback = NULL;
     flashDevice.vTable->eraseCompletely(&flashDevice);
+
+    if (!flashWaitForReadyOrFail()) {
+        return;
+    }
 }
 
 /* The callback, if provided, will receive the totoal number of bytes transfered
  * by each call to flashPageProgramContinue() once the transfer completes.
  */
-MMFLASH_CODE void flashPageProgramBegin(uint32_t address, void (*callback)(uint32_t length))
+MMFLASH_CODE void flashPageProgramBegin(uint32_t address, void (*callback)(uintptr_t arg))
 {
     flashDevice.vTable->pageProgramBegin(&flashDevice, address, callback);
 }
@@ -458,7 +506,7 @@ MMFLASH_CODE void flashPageProgramFinish(void)
     flashDevice.vTable->pageProgramFinish(&flashDevice);
 }
 
-MMFLASH_CODE void flashPageProgram(uint32_t address, const uint8_t *data, uint32_t length, void (*callback)(uint32_t length))
+MMFLASH_CODE void flashPageProgram(uint32_t address, const uint8_t *data, uint32_t length, void (*callback)(uintptr_t arg))
 {
     flashDevice.vTable->pageProgram(&flashDevice, address, data, length, callback);
 }
@@ -473,6 +521,8 @@ MMFLASH_CODE void flashFlush(void)
 {
     if (flashDevice.vTable->flush) {
         flashDevice.vTable->flush(&flashDevice);
+
+        flashWaitForReadyOrFail();
     }
 }
 

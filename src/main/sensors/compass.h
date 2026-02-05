@@ -22,9 +22,13 @@
 
 #include "common/time.h"
 #include "common/sensor_alignment.h"
+#include "common/vector.h"
+
 #include "drivers/io_types.h"
 #include "drivers/sensor.h"
+
 #include "pg/pg.h"
+
 #include "sensors/sensors.h"
 
 #define TASK_COMPASS_RATE_HZ 40 // the base mag update rate; faster intervals will apply for higher ODR mags
@@ -40,12 +44,15 @@ typedef enum {
     MAG_LIS2MDL = 6,
     MAG_LIS3MDL = 7,
     MAG_MPU925X_AK8963 = 8,
-    MAG_IST8310 = 9
+    MAG_IST8310 = 9,
+    MAG_HARDWARE_COUNT
 } magSensor_e;
+
+extern const char * const magSensorNames[MAG_HARDWARE_COUNT];
 
 typedef struct mag_s {
     bool isNewMagADCFlag;
-    float magADC[XYZ_AXIS_COUNT];
+    vector3_t magADC;
 } mag_t;
 
 extern mag_t mag;
@@ -81,4 +88,4 @@ void compassStartCalibration(void);
 bool compassIsCalibrationComplete(void);
 void compassBiasEstimatorInit(compassBiasEstimator_t *compassBiasEstimator, const float lambda_min, const float p0);
 void compassBiasEstimatorUpdate(compassBiasEstimator_t *compassBiasEstimator, const float lambda_min, const float p0);
-void compassBiasEstimatorApply(compassBiasEstimator_t *cBE, float *mag);
+void compassBiasEstimatorApply(compassBiasEstimator_t *cBE, vector3_t *mag);

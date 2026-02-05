@@ -147,7 +147,6 @@ typedef struct crsfPayloadRcChannelsPacked_s crsfPayloadRcChannelsPacked_t;
 *  - last channel packed with specified resolution
 */
 
-
 #if defined(USE_CRSF_LINK_STATISTICS)
 /*
  * 0x14 Link statistics
@@ -393,8 +392,10 @@ STATIC_UNIT_TESTED void crsfDataReceive(uint16_t c, void *data)
                 case CRSF_FRAMETYPE_SUBSET_RC_CHANNELS_PACKED:
                     if (crsfFrame.frame.deviceAddress == CRSF_ADDRESS_FLIGHT_CONTROLLER) {
                         rxRuntimeState->lastRcFrameTimeUs = currentTimeUs;
-                        crsfFrameDone = true;
+                        // IMPORTANT: Copy frame data BEFORE setting flag to avoid race condition
+                        // where crsfFrameStatus() could see flag=true but read stale data
                         memcpy(&crsfChannelDataFrame, &crsfFrame, sizeof(crsfFrame));
+                        crsfFrameDone = true;
                     }
                     break;
 
@@ -630,7 +631,6 @@ bool crsfRxInit(const rxConfig_t *rxConfig, rxRuntimeState_t *rxRuntimeState)
     rxRuntimeState->channelCount = CRSF_MAX_CHANNEL;
     rxRuntimeState->rcReadRawFn = crsfReadRawRC;
     rxRuntimeState->rcFrameStatusFn = crsfFrameStatus;
-    rxRuntimeState->rcFrameTimeUsFn = rxFrameTimeUs;
 
     const serialPortConfig_t *portConfig = findSerialPortConfig(FUNCTION_RX_SERIAL);
     if (!portConfig) {

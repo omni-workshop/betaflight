@@ -31,7 +31,15 @@ typedef enum {
     RANGEFINDER_HCSR04      = 1,
     RANGEFINDER_TFMINI      = 2,
     RANGEFINDER_TF02        = 3,
+    RANGEFINDER_MTF01       = 4,
+    RANGEFINDER_MTF02       = 5,
+    RANGEFINDER_MTF01P      = 6,
+    RANGEFINDER_MTF02P      = 7,
+    RANGEFINDER_TFNOVA      = 8,
+    RANGEFINDER_HARDWARE_COUNT
 } rangefinderType_e;
+
+extern const char * const rangefinderTypeNames[RANGEFINDER_HARDWARE_COUNT];
 
 typedef struct rangefinderConfig_s {
     uint8_t rangefinder_hardware;

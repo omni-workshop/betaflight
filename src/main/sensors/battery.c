@@ -101,6 +101,10 @@ static float wattHoursDrawn;
 #define DEFAULT_VOLTAGE_METER_SOURCE VOLTAGE_METER_NONE
 #endif
 
+#ifndef DEFAULT_IBAT_LPF_PERIOD
+#define DEFAULT_IBAT_LPF_PERIOD 10
+#endif
+
 PG_REGISTER_WITH_RESET_TEMPLATE(batteryConfig_t, batteryConfig, PG_BATTERY_CONFIG, 3);
 
 PG_RESET_TEMPLATE(batteryConfig_t, batteryConfig,
@@ -129,7 +133,7 @@ PG_RESET_TEMPLATE(batteryConfig_t, batteryConfig,
 
     .vbatDisplayLpfPeriod = 30,
     .vbatSagLpfPeriod = 2,
-    .ibatLpfPeriod = 10,
+    .ibatLpfPeriod = DEFAULT_IBAT_LPF_PERIOD,
     .vbatDurationForWarning = 0,
     .vbatDurationForCritical = 0,
 );
@@ -238,11 +242,11 @@ void batteryUpdatePresence(void)
         batteryCriticalVoltage = 0;
         batteryWarningHysteresisVoltage = 0;
         batteryCriticalHysteresisVoltage = 0;
-        wattHoursDrawn = 0.0;
+        wattHoursDrawn = 0.0f;
     }
 }
 
-void batteryUpdateWhDrawn(void)
+static void batteryUpdateWhDrawn(void)
 {
     static int32_t mAhDrawnPrev = 0;
     const int32_t mAhDrawnCurrent = getMAhDrawn();
@@ -497,7 +501,18 @@ uint8_t calculateBatteryPercentageRemaining(void)
         if (batteryCapacity > 0) {
             batteryPercentage = constrain(((float)batteryCapacity - currentMeter.mAhDrawn) * 100 / batteryCapacity, 0, 100);
         } else {
-            batteryPercentage = constrain((((uint32_t)voltageMeter.displayFiltered - (batteryConfig()->vbatmincellvoltage * batteryCellCount)) * 100) / ((batteryConfig()->vbatmaxcellvoltage - batteryConfig()->vbatmincellvoltage) * batteryCellCount), 0, 100);
+            uint32_t batteryVoltage = voltageMeter.displayFiltered;
+            uint32_t batteryVoltageMin = batteryConfig()->vbatmincellvoltage * batteryCellCount;
+            uint32_t batteryVoltageMax = batteryConfig()->vbatmaxcellvoltage * batteryCellCount;
+            if (batteryVoltage <= batteryVoltageMin) {
+                batteryPercentage = 0;
+            } else if (batteryVoltage >= batteryVoltageMax) {
+                batteryPercentage = 100;
+            } else if (batteryVoltageMax > batteryVoltageMin) {
+                batteryPercentage = (uint8_t)(((batteryVoltage - batteryVoltageMin) * 100) / (batteryVoltageMax - batteryVoltageMin));
+            } else {
+                batteryPercentage = 0;
+            }
         }
     }
 
